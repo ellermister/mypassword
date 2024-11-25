@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"os/exec"
 	"syscall"
 	"time"
 )
@@ -21,195 +22,19 @@ var uiHtml string
 //go:embed password.html
 var passwordHtml string
 
-type FileDoc struct {
+type Document struct {
 	Id      int    `json:"id"`
 	Title   string `json:"title"`
 	Content string `json:"content"`
 }
 
-func sqlConnectDB(path string, key string) (*sql.DB, error) {
-	key = url.QueryEscape(key)
-	dbname := fmt.Sprintf("%s?_cipher=sqlcipher&_legacy=3&_hmac_use=off&_kdf_iter=4000&_legacy_page_size=1024&_key=%s", path, key)
-	db, err := sql.Open("sqlite3", dbname)
-	if err != nil {
-		log.Fatalf("Open Error %v\n", err)
-		return nil, err
-	}
-	return db, nil
-}
-
-func sqlCreateTable(db *sql.DB) bool {
-	sqlText := `
-CREATE TABLE IF NOT EXISTS "main"."docs" (
-"id"  INTEGER PRIMARY KEY autoincrement,
-"title"  TEXT,
-"content"  TEXT,
-"status"  INTEGER,
-"created_at"  TEXT,
-"updated_at"  TEXT
-)
-;`
-
-	_, err := db.Exec(sqlText)
-	if err != nil {
-		log.Fatal("Failed to create table:", err)
-		return false
-	}
-	log.Printf("created docs successfully!")
-	return true
-}
-
-func sqlCreateFile(db *sql.DB, title string, content string) bool {
-	sqlText := `
-		INSERT INTO docs ('title', 'content', 'status', 'created_at', 'updated_at')
-		VALUES (?, ?, ?, ?, ?)
-	`
-
-	currentTime := time.Now()
-	//  执行 SQL 语句，传递实际参数
-	result, err := db.Exec(sqlText, title, content, 1, currentTime, currentTime)
-	if err != nil {
-		log.Fatalf("Error executing SQL: %v", err)
-		return false
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		log.Fatalf("Error retrieving last insert ID: %v", err)
-		return false
-	}
-
-	log.Printf("Record inserted with ID: %d\n", id)
-
-	return true
-}
-
-func sqlDeleteFile(db *sql.DB, id int) bool {
-	sqlText := `DELETE FROM docs WHERE id=?`
-	_, err := db.Exec(sqlText, id)
-	if err != nil {
-		log.Fatalf("Error executing SQL: %v", err)
-		return false
-	}
-	return true
-}
-
-func sqlUpdateFile(db *sql.DB, id int, title string, content string) bool {
-	sqlText := `UPDATE docs SET content=?, title=?,updated_at=? WHERE id=?`
-	currentTime := time.Now()
-	_, err := db.Exec(sqlText, content, title, currentTime, id)
-	if err != nil {
-		log.Fatalf("Error executing SQL: %v", err)
-		return false
-	}
-	return true
-}
-
-func sqlGetOneFile(db *sql.DB, id int) (*FileDoc, error) {
-	sqlText := "SELECT id,title,content FROM docs where id = ?"
-	log.Printf("query docs for id : %d", id)
-
-	var fileDoc FileDoc
-	err := db.QueryRow(sqlText, id).Scan(&fileDoc.Id, &fileDoc.Title, &fileDoc.Content)
-
-	if err != nil {
-		log.Printf("Error executing SQL: %v", err)
-		return nil, err
-	}
-	return &fileDoc, nil
-}
-
-func sqlGetAllFile(db *sql.DB, keyword string) []FileDoc {
-	var sqlText string
-	var args []interface{}
-
-	if keyword == "" {
-		sqlText = "SELECT id, title, content FROM docs"
-	} else {
-		sqlText = "SELECT id, title, content FROM docs WHERE title LIKE ? OR content LIKE ?"
-		keyword = "%" + keyword + "%" // 为关键字添加通配符
-		args = append(args, keyword, keyword)
-	}
-
-	// 执行查询
-	result, err := db.Query(sqlText, args...)
-	if err != nil {
-		log.Fatalf("Error executing SQL: %v", err)
-		fmt.Printf("ddd %v", []FileDoc{})
-		return make([]FileDoc, 0)
-	}
-	defer result.Close()
-
-	// 处理查询结果
-	var rows = make([]FileDoc, 0)
-	for result.Next() {
-		var row FileDoc
-		err = result.Scan(&row.Id, &row.Title, &row.Content)
-		if err != nil {
-			log.Fatal(err)
-		}
-		rows = append(rows, row)
-	}
-	return rows
-}
-
-func sqlIsCreatedDB(path string) bool {
-	_, err := os.Stat(path)
-	if err != nil {
-		return false
-	}
-	return true
-}
-
-func sqlCreateDB(path string, password string) bool {
-	if !sqlIsCreatedDB(path) {
-		db, err := sqlConnectDB(path, password)
-		if err != nil {
-			log.Fatalf("Error connecting to database: %v", err)
-			return false
-		}
-		DBConnect = db
-
-		sqlCreateTable(db)
-		return true
-	}
-	return false
-}
-
-func sqlTestDBConnect(db *sql.DB) bool {
-	var i string
-	err := db.QueryRow("SELECT SQLITE_VERSION()").Scan(&i)
-	if err != nil {
-		return false
-		//log.Fatal("version query error:", err)
-	}
-	return true
-	//fmt.Println("SQLITE_VERSION() =", i) // pseudorandom
-}
-
-func sqlLoginDB(path string, password string) bool {
-	if sqlIsCreatedDB(path) {
-		db, err := sqlConnectDB(path, password)
-		if err != nil {
-			log.Fatalf("Error connecting to database: %v", err)
-			return false
-		}
-		DBConnect = db
-
-		if sqlTestDBConnect(db) {
-			return true
-		}
-		return false
-	}
-	return false
-}
-
 var (
-	DBPath    = "./pass.db"
-	DBConnect *sql.DB
-	version   = "1.0"
-	windowW   = 960
-	windowH   = 500
+	DBPath       = "./pass.db"
+	DBConnection *sql.DB
+	version      = "1.1"
+	windowTitle  = "My password v" + version
+	windowWidth  = 960
+	windowHeight = 500
 
 	// 加载 user32.dll
 	user32                       = syscall.NewLazyDLL("user32.dll")
@@ -230,73 +55,219 @@ func SetWindowDisplayAffinity(hWnd uintptr, dwAffinity uint32) error {
 	return nil
 }
 
+func connectToDatabase(path string, key string) (*sql.DB, error) {
+	key = url.QueryEscape(key)
+	dbURL := fmt.Sprintf("%s?_cipher=sqlcipher&_legacy=3&_hmac_use=off&_kdf_iter=4000&_legacy_page_size=1024&_key=%s", path, key)
+	db, err := sql.Open("sqlite3", dbURL)
+	if err != nil {
+		log.Printf("Failed to connect to database: %v", err)
+		return nil, err
+	}
+	return db, nil
+}
+
+func createDocsTable(db *sql.DB) error {
+	query := `
+CREATE TABLE IF NOT EXISTS "main"."docs" (
+	"id" INTEGER PRIMARY KEY AUTOINCREMENT,
+	"title" TEXT,
+	"content" TEXT,
+	"status" INTEGER,
+	"created_at" TEXT,
+	"updated_at" TEXT
+);`
+	_, err := db.Exec(query)
+	if err != nil {
+		return fmt.Errorf("failed to create table: %w", err)
+	}
+	log.Println("Docs table created successfully!")
+	return nil
+}
+
+func addDocument(db *sql.DB, title, content string) (int64, error) {
+	query := `
+INSERT INTO docs (title, content, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?);`
+	now := time.Now()
+	result, err := db.Exec(query, title, content, 1, now, now)
+	if err != nil {
+		return 0, fmt.Errorf("failed to insert document: %w", err)
+	}
+	return result.LastInsertId()
+}
+
+func deleteDocument(db *sql.DB, id int) error {
+	query := `DELETE FROM docs WHERE id=?`
+	_, err := db.Exec(query, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete document: %w", err)
+	}
+	return nil
+}
+
+func updateDocument(db *sql.DB, id int, title, content string) error {
+	query := `UPDATE docs SET title=?, content=?, updated_at=? WHERE id=?`
+	now := time.Now()
+	_, err := db.Exec(query, title, content, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to update document: %w", err)
+	}
+	return nil
+}
+
+func getDocument(db *sql.DB, id int) (*Document, error) {
+	query := `SELECT id, title, content FROM docs WHERE id = ?`
+	var doc Document
+	err := db.QueryRow(query, id).Scan(&doc.Id, &doc.Title, &doc.Content)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch document: %w", err)
+	}
+	return &doc, nil
+}
+
+func searchDocuments(db *sql.DB, keyword string) ([]Document, error) {
+	var query string
+	var args []interface{}
+
+	if keyword == "" {
+		query = "SELECT id, title, content FROM docs"
+	} else {
+		query = "SELECT id, title, content FROM docs WHERE title LIKE ? OR content LIKE ?"
+		keyword = "%" + keyword + "%"
+		args = append(args, keyword, keyword)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return make([]Document, 0), fmt.Errorf("failed to search documents: %w", err)
+	}
+	defer rows.Close()
+
+	var results = make([]Document, 0)
+	for rows.Next() {
+		var doc Document
+		if err := rows.Scan(&doc.Id, &doc.Title, &doc.Content); err != nil {
+			return nil, fmt.Errorf("failed to scan document row: %w", err)
+		}
+		results = append(results, doc)
+	}
+	return results, nil
+}
+
+func isDatabaseInitialized(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func initializeDatabase(path, password string) (*sql.DB, error) {
+	if isDatabaseInitialized(path) {
+		return nil, fmt.Errorf("database already exists")
+	}
+	db, err := connectToDatabase(path, password)
+	if err != nil {
+		return nil, err
+	}
+	if err := createDocsTable(db); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+func testDatabaseConnection(db *sql.DB) error {
+	var version string
+	if err := db.QueryRow("SELECT SQLITE_VERSION()").Scan(&version); err != nil {
+		return fmt.Errorf("database connection test failed: %w", err)
+	}
+	return nil
+}
+
+func authenticateDatabase(path, password string) (*sql.DB, error) {
+	db, err := connectToDatabase(path, password)
+	if err != nil {
+		return nil, err
+	}
+	if err := testDatabaseConnection(db); err != nil {
+		return nil, err
+	}
+	return db, nil
+}
+
+func openURLByBrowser(url string) {
+	cmd := exec.Command("cmd", "/c", "start", url)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.Start()
+}
+
 func main() {
-	fmt.Printf("sqlIsCreatedDB(DBPath) %v", sqlIsCreatedDB(DBPath))
+	fmt.Printf("isDatabaseInitialized(DBPath) %v", isDatabaseInitialized(DBPath))
 
 	w := webview.New(false)
 	defer w.Destroy()
 
-	fmt.Printf("hwnd %d", w.Window())
+	var hWnd = uintptr(w.Window())
 
-	var hWnd = uintptr(w.Window()) // 替换为您的窗口句柄
-
-	err := SetWindowDisplayAffinity(hWnd, WDA_EXCLUDEFROMCAPTURE)
-	if err != nil {
-		fmt.Println("Error:", err)
-	} else {
-		fmt.Println("Window is now excluded from capture.")
+	if err := SetWindowDisplayAffinity(hWnd, WDA_EXCLUDEFROMCAPTURE); err != nil {
+		fmt.Printf("Error setting window affinity: %e", err)
 	}
 
-	w.SetTitle("My password - " + version)
-	w.SetSize(windowW, windowH, webview.HintNone)
+	w.SetTitle(windowTitle)
+	w.SetSize(windowWidth, windowHeight, webview.HintNone)
 
-	w.Bind("sqlGetAllFile", func(keyword string) []FileDoc {
-		return sqlGetAllFile(DBConnect, keyword)
+	w.Bind("ui_searchDocuments", func(keyword string) []Document {
+		docs, _ := searchDocuments(DBConnection, keyword)
+		return docs
 	})
-	w.Bind("sqlGetOneFile", func(id int) FileDoc {
-		doc, err := sqlGetOneFile(DBConnect, id)
+	w.Bind("ui_getDocument", func(id int) Document {
+		doc, err := getDocument(DBConnection, id)
 		if err != nil {
-			return FileDoc{}
+			return Document{}
 		}
-		return FileDoc{Id: id, Title: doc.Title, Content: doc.Content}
+		return Document{Id: id, Title: doc.Title, Content: doc.Content}
 	})
-	w.Bind("sqlUpdateFile", func(id int, title string, content string) bool {
-		result := sqlUpdateFile(DBConnect, id, title, content)
-		if result == false {
-			return false
-		}
-		return true
+	w.Bind("ui_updateDocument", func(id int, title string, content string) bool {
+		result := updateDocument(DBConnection, id, title, content)
+		return result == nil
 	})
-	w.Bind("sqlDeleteFile", func(id int) bool {
-		result := sqlDeleteFile(DBConnect, id)
-		if result == false {
-			return false
-		}
-		return true
+	w.Bind("ui_deleteDocument", func(id int) bool {
+		result := deleteDocument(DBConnection, id)
+		return result == nil
 	})
-	w.Bind("sqlCreateFile", func(title string, content string) bool {
-		result := sqlCreateFile(DBConnect, title, content)
-		if result == false {
-			return false
-		}
-		return true
+	w.Bind("ui_addDocument", func(title string, content string) bool {
+		insertId, _ := addDocument(DBConnection, title, content)
+		return insertId > 0
 	})
 
-	w.Bind("setTitle", func(title string) {
-		w.SetTitle(title)
+	w.Bind("ui_setTitle", func(title string) {
+		w.SetTitle(windowTitle + " - " + title)
 	})
 
-	w.Bind("sqlIsCreatedDB", func() bool {
-		return sqlIsCreatedDB(DBPath)
+	w.Bind("ui_isDatabaseInitialized", func() bool {
+		return isDatabaseInitialized(DBPath)
 	})
-	w.Bind("sqlCreateDB", func(password string) bool {
-		return sqlCreateDB(DBPath, password)
+	w.Bind("ui_initializeDatabase", func(password string) bool {
+		db, err := initializeDatabase(DBPath, password)
+		if err != nil {
+			log.Printf("Failed to initialize database: %v", err)
+			return false
+		}
+		DBConnection = db
+		return true
 	})
-	w.Bind("sqlLoginDB", func(password string) bool {
-		return sqlLoginDB(DBPath, password)
+	w.Bind("ui_authenticateDatabase", func(password string) bool {
+		db, err := authenticateDatabase(DBPath, password)
+		if err != nil {
+			log.Printf("Authentication failed: %v", err)
+			return false
+		}
+		DBConnection = db
+		return true
 	})
-	w.Bind("goMainPage", func() {
+	w.Bind("ui_goMainPage", func() {
 		w.SetHtml(uiHtml)
+	})
+
+	w.Bind("ui_OpenSourceCodeURL", func() {
+		openURLByBrowser("https://github.com/ellermister/mypassword")
 	})
 
 	w.SetHtml(passwordHtml)

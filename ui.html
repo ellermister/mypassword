@@ -146,11 +146,11 @@
         };
 
         const showOneDocs = async (id, element) => {
-            var doc = await sqlGetOneFile(id);
+            var doc = await ui_getDocument(id);
             currentDocId = id;
             document.getElementById('editor').innerHTML = doc.content;
             document.title = doc.title;
-            setTitle("My Password - "+doc.title)
+            ui_setTitle(doc.title)
 
             // 高亮当前选中项
             const allItems = document.querySelectorAll('.collect div');
@@ -159,27 +159,27 @@
         };
 
         const saveDoc = async (id, title, content) => {
-            if (!await sqlUpdateFile(id, title, content)) {
-                alert('保存失败');
+            if (!await ui_updateDocument(id, title, content)) {
+                alert('Save failed');
             }
             refreshDocsEvent();
         };
 
         const deleteDoc = async (id) => {
-            if (!await sqlDeleteFile(id)) {
-                alert('删除失败');
+            if (!await ui_deleteDocument(id)) {
+                alert('Delete failed');
             }
         };
 
         const refreshDocsEvent = async () => {
             const queryKeyword = document.getElementById('query-keyword').value.trim();
-            const result = await sqlGetAllFile(queryKeyword);
+            const result = await ui_searchDocuments(queryKeyword);
             currentTempDocs = result
             showDocs(result);
         };
 
         const deleteDocEvent = async () => {
-            if (confirm("确认是否删除?")) {
+            if (confirm("Do you really to delete it??")) {
                 await deleteDoc(currentDocId);
                 refreshDocsEvent();
             }
@@ -198,7 +198,7 @@
             document.getElementById('removeFile').addEventListener('click', deleteDocEvent);
 
             document.getElementById('newFile').addEventListener('click', () => {
-                sqlCreateFile('新文档', "...");
+                ui_addDocument('New Document', "...");
                 refreshDocsEvent();
             });
 
@@ -279,11 +279,10 @@
                     for(const file of inputObj.files){
                         const content = await readFile(file)
                         const newContent = `${file.name}\n ${content}`
-                        console.log(newContent)
 
                         var tempDivEditor = document.createElement('div')
                         tempDivEditor.innerText = newContent
-                        sqlCreateFile(file.name, tempDivEditor.innerHTML);
+                        ui_addDocument(file.name, tempDivEditor.innerHTML);
                         refreshDocsEvent();
                     }
                 }
